@@ -108,8 +108,8 @@ void spiInternalResetDescriptors(busDevice_t *bus)
     DMA_InitTypeDef *initRx = bus->initRx;
 
     DMA_StructInit(initTx);
-    initTx->DMA_Channel = bus->dmaTxChannel;
-    initTx->DMA_DIR = DMA_DIR_MemoryToPeripheral;
+    initTx->DMA_DIR = DMA_DIR_PeripheralDST;
+    initTx->DMA_M2M = DMA_M2M_Disable;
     initTx->DMA_Mode = DMA_Mode_Normal;
     initTx->DMA_PeripheralBaseAddr = (uint32_t)&bus->busType_u.spi.instance->DR;
     initTx->DMA_Priority = DMA_Priority_Low;
@@ -118,8 +118,8 @@ void spiInternalResetDescriptors(busDevice_t *bus)
     initTx->DMA_MemoryDataSize = DMA_MemoryDataSize_Byte;
 
     DMA_StructInit(initRx);
-    initRx->DMA_Channel = bus->dmaRxChannel;
-    initRx->DMA_DIR = DMA_DIR_PeripheralToMemory;
+    initRx->DMA_DIR = DMA_DIR_PeripheralSRC;
+    initRx->DMA_M2M = DMA_M2M_Disable;
     initRx->DMA_Mode = DMA_Mode_Normal;
     initRx->DMA_PeripheralBaseAddr = (uint32_t)&bus->busType_u.spi.instance->DR;
     initRx->DMA_Priority = DMA_Priority_Low;
@@ -129,13 +129,13 @@ void spiInternalResetDescriptors(busDevice_t *bus)
 
 void spiInternalResetStream(dmaChannelDescriptor_t *descriptor)
 {
-    DMA_Stream_TypeDef *streamRegs = (DMA_Stream_TypeDef *)descriptor->ref;
+    DMA_Channel_TypeDef *channel = (DMA_Channel_TypeDef *)descriptor->ref;
 
     // Disable the stream
-    streamRegs->CR = 0U;
+    channel->CCR = 0U;
 
     // Clear any pending interrupt flags
-    DMA_CLEAR_FLAG(descriptor, DMA_IT_HTIF | DMA_IT_TEIF | DMA_IT_TCIF);
+    DMA_ClearFlag((DMA_IT_HTIF | DMA_IT_TEIF | DMA_IT_TCIF) << descriptor->flagsShift);
 }
 
 static bool spiInternalReadWriteBufPolled(SPI_TypeDef *instance, const uint8_t *txData, uint8_t *rxData, int len)
@@ -145,10 +145,10 @@ static bool spiInternalReadWriteBufPolled(SPI_TypeDef *instance, const uint8_t *
     while (len--) {
         b = txData ? *(txData++) : 0xFF;
         while (SPI_I2S_GetFlagStatus(instance, SPI_I2S_FLAG_TXE) == RESET);
-        SPI_I2S_SendData(instance, b);
+        SPI_SendData8(instance, b);
 
         while (SPI_I2S_GetFlagStatus(instance, SPI_I2S_FLAG_RXNE) == RESET);
-        b = SPI_I2S_ReceiveData(instance);
+        b = SPI_ReceiveData8(instance);
         if (rxData) {
             *(rxData++) = b;
         }
@@ -182,24 +182,24 @@ void spiInternalInitStream(const extDevice_t *dev, bool preInit)
     DMA_InitTypeDef *initRx = bus->initRx;
 
     if (txData) {
-        initTx->DMA_Memory0BaseAddr = (uint32_t)txData;
+        initTx->DMA_MemoryBaseAddr = (uint32_t)txData;
         initTx->DMA_MemoryInc = DMA_MemoryInc_Enable;
     } else {
         dummyTxByte = 0xff;
-        initTx->DMA_Memory0BaseAddr = (uint32_t)&dummyTxByte;
+        initTx->DMA_MemoryBaseAddr = (uint32_t)&dummyTxByte;
         initTx->DMA_MemoryInc = DMA_MemoryInc_Disable;
     }
     initTx->DMA_BufferSize = len;
 
     if (rxData) {
-        initRx->DMA_Memory0BaseAddr = (uint32_t)rxData;
+        initRx->DMA_MemoryBaseAddr = (uint32_t)rxData;
         initRx->DMA_MemoryInc = DMA_MemoryInc_Enable;
     } else {
-        initRx->DMA_Memory0BaseAddr = (uint32_t)&dummyRxByte;
+        initRx->DMA_MemoryBaseAddr = (uint32_t)&dummyRxByte;
         initRx->DMA_MemoryInc = DMA_MemoryInc_Disable;
     }
     // If possible use 16 bit memory writes to prevent atomic access issues on gyro data
-    if ((initRx->DMA_Memory0BaseAddr & 0x1) || (len & 0x1))
+    if ((initRx->DMA_MemoryBaseAddr & 0x1) || (len & 0x1))
     {
         initRx->DMA_MemoryDataSize = DMA_MemoryDataSize_Byte;
     } else {
@@ -215,39 +215,39 @@ void spiInternalStartDMA(const extDevice_t *dev)
 
     dmaChannelDescriptor_t *dmaTx = dev->bus->dmaTx;
     dmaChannelDescriptor_t *dmaRx = dev->bus->dmaRx;
-    DMA_Stream_TypeDef *streamRegsTx = (DMA_Stream_TypeDef *)dmaTx->ref;
-    DMA_Stream_TypeDef *streamRegsRx = (DMA_Stream_TypeDef *)dmaRx->ref;
+    DMA_Channel_TypeDef *channelTx = (DMA_Channel_TypeDef *)dmaTx->ref;
+    DMA_Channel_TypeDef *channelRx = (DMA_Channel_TypeDef *)dmaRx->ref;
 
     // Use the correct callback argument
     dmaRx->userParam = (uint32_t)dev;
 
     // Clear transfer flags
-    DMA_CLEAR_FLAG(dmaTx, DMA_IT_HTIF | DMA_IT_TEIF | DMA_IT_TCIF);
-    DMA_CLEAR_FLAG(dmaRx, DMA_IT_HTIF | DMA_IT_TEIF | DMA_IT_TCIF);
+    DMA_ClearFlag((DMA_IT_HTIF | DMA_IT_TEIF | DMA_IT_TCIF) << dmaTx->flagsShift);
+    DMA_ClearFlag((DMA_IT_HTIF | DMA_IT_TEIF | DMA_IT_TCIF) << dmaRx->flagsShift);
 
-    // Disable streams to enable update
-    streamRegsTx->CR = 0U;
-    streamRegsRx->CR = 0U;
+    // Disable channels to enable update
+    channelTx->CCR = 0U;
+    channelRx->CCR = 0U;
 
     /* Use the Rx interrupt as this occurs once the SPI operation is complete whereas the Tx interrupt
      * occurs earlier when the Tx FIFO is empty, but the SPI operation is still in progress
      */
-    DMA_ITConfig(streamRegsRx, DMA_IT_TC, ENABLE);
+    DMA_ITConfig(channelRx, DMA_IT_TC, ENABLE);
 
-    // Update streams
-    DMA_Init(streamRegsTx, dev->bus->initTx);
-    DMA_Init(streamRegsRx, dev->bus->initRx);
+    // Update channels
+    DMA_Init(channelTx, dev->bus->initTx);
+    DMA_Init(channelRx, dev->bus->initRx);
 
     /* Note from AN4031
      *
-     * If the user enables the used peripheral before the corresponding DMA stream, a “FEIF”
+     * If the user enables the used peripheral before the corresponding DMA stream, a "FEIF"
      * (FIFO Error Interrupt Flag) may be set due to the fact the DMA is not ready to provide
      * the first required data to the peripheral (in case of memory-to-peripheral transfer).
      */
 
-    // Enable streams
-    DMA_Cmd(streamRegsTx, ENABLE);
-    DMA_Cmd(streamRegsRx, ENABLE);
+    // Enable channels
+    DMA_Cmd(channelTx, ENABLE);
+    DMA_Cmd(channelRx, ENABLE);
 
     /* Enable the SPI DMA Tx & Rx requests */
     SPI_I2S_DMACmd(dev->bus->busType_u.spi.instance, SPI_I2S_DMAReq_Tx | SPI_I2S_DMAReq_Rx, ENABLE);
@@ -258,13 +258,13 @@ void spiInternalStopDMA (const extDevice_t *dev)
 {
     dmaChannelDescriptor_t *dmaTx = dev->bus->dmaTx;
     dmaChannelDescriptor_t *dmaRx = dev->bus->dmaRx;
-    DMA_Stream_TypeDef *streamRegsTx = (DMA_Stream_TypeDef *)dmaTx->ref;
-    DMA_Stream_TypeDef *streamRegsRx = (DMA_Stream_TypeDef *)dmaRx->ref;
+    DMA_Channel_TypeDef *channelTx = (DMA_Channel_TypeDef *)dmaTx->ref;
+    DMA_Channel_TypeDef *channelRx = (DMA_Channel_TypeDef *)dmaRx->ref;
     SPI_TypeDef *instance = dev->bus->busType_u.spi.instance;
 
-    // Disable streams
-    streamRegsTx->CR = 0U;
-    streamRegsRx->CR = 0U;
+    // Disable channels
+    channelTx->CCR = 0U;
+    channelRx->CCR = 0U;
 
     SPI_I2S_DMACmd(instance, SPI_I2S_DMAReq_Tx | SPI_I2S_DMAReq_Rx, DISABLE);
 }
