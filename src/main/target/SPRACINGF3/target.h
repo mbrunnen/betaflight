@@ -127,6 +127,8 @@
 #define USE_MAG_DATA_READY_SIGNAL
 #define ENSURE_MAG_DATA_READY_IS_HIGH
 #define MAG_INT_EXTI            PC14
+
+#undef USE_MSP_DISPLAYPORT
 #endif
 
 #if !defined(IRCSYNERGYF3)
