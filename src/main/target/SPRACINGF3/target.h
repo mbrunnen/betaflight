@@ -129,6 +129,8 @@
 #define MAG_INT_EXTI            PC14
 
 #undef USE_MSP_DISPLAYPORT
+#undef USE_GPS
+#undef USE_TELEMETRY_GHST
 #endif
 
 #if !defined(IRCSYNERGYF3)
